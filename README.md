@@ -49,7 +49,8 @@ Q-update (training only)  team reward (capture/escape) + distance shaping
 | astar.py | A* planner (fallback / `--planner astar`) |
 | minimax.py | Alpha-beta zombie search with move ordering |
 | qlearn.py | Shared Q-table, self-play training, save/load |
-| gui.py | Pygame visualisation (risk field shown as red tint) |
+| advisor.py | **Co-pilot**: ranks up to 3 different recommended moves for the human player |
+| gui.py | Pygame visualisation (risk field shown as red tint, manual-mode panel) |
 | config.py | All tunables |
 
 ## Run
@@ -70,10 +71,46 @@ Train the Q-learning zombies, then play against them:
 
 Other flags: `--planner astar`, `--zombie minimax|q`, `--verbose`.
 
-GUI keys: SPACE = one turn, A = auto-play, R = restart, ESC = quit.
+GUI keys (auto mode): SPACE = one turn, A = auto-play, M = manual mode, R = restart, ESC = quit.
 Legend: blue circle = human, red square = zombie, grey = wall, green = safe
 zone, yellow dots = planned path, red cell tint = zombie risk field.
 Console: H, Z, #, S, * (path).
+
+## Manual / co-pilot mode (human decides, AI advises)
+
+Press **M** in the GUI (or start with `--manual`) and *you* make the moves.
+Before every turn the AI shows up to 3 different recommended moves; you can
+take one of them or ignore them all and play your own move. Auto mode still
+works exactly as before.
+
+    python main.py --manual                  # GUI, manual mode from the start
+    python main.py --manual --console        # text mode
+    python main.py --manual --zombie q --load q_table.json
+
+Where recommendations come from (`advisor.py`) - each is a different way of thinking:
+
+| Tag | Idea |
+|---|---|
+| Planner | the risk-aware D* Lite / A* route the AI itself would follow |
+| Fastest | closest to the safe zone, avoiding capture range |
+| Safest | keeps the most distance from the zombies |
+| Lookahead | best result after the zombies' predicted reply (real zombie brain) |
+
+If several strategies pick the same cell they merge into one recommendation
+("Planner + Fastest + Lookahead"). Each card shows a risk level (LOW / MEDIUM /
+HIGH / DEADLY), steps to the safe zone and the nearest-zombie distance. Moves
+are ranked by outcome, then by how many strategies agree.
+
+Manual-mode controls (GUI): click a highlighted cell, **arrow keys** (X = stay),
+**1 / 2 / 3** = take that AI pick, **SPACE / ENTER** = take pick #1, **M** =
+switch back to auto. Numbered coloured badges on the board are the AI picks;
+hollow rings are your other legal moves. The panel counts how many AI picks you
+followed versus your own moves.
+
+Console keys: `1`/`2`/`3` or Enter = AI pick, `u d l r` = your own move,
+`.` = stay, `q` = quit. In the text map, digits are the recommended cells.
+
+You may also play a move the AI rates DEADLY - it is your decision.
 
 ## Tweak difficulty (config.py)
 
