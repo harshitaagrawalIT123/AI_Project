@@ -8,6 +8,8 @@ Usage:
     python main.py --train 500        # train the Q-learning zombies, then play
     python main.py --zombie q --load q_table.json
     python main.py --planner astar    # use plain A* instead of D* Lite
+    python main.py --manual           # YOU choose the moves, AI recommends
+    python main.py --manual --console # same, in text mode
 """
 import argparse
 import time
@@ -25,6 +27,42 @@ def run_console(seed, delay, **game_kw):
         print(f"Turn {g.turn}")
         print(g.render_text(), "\n")
         time.sleep(delay)
+    print(g.status.upper(), "-", g.message)
+
+
+CONSOLE_KEYS = {"u": (0, -1), "d": (0, 1), "l": (-1, 0), "r": (1, 0),
+                ".": (0, 0)}
+
+
+def run_console_manual(seed, **game_kw):
+    """Text-mode co-pilot: the AI recommends, the human decides."""
+    g = Game(seed, manual=True, **game_kw)
+    print("MANUAL MODE - you decide every move.\n"
+          "  1/2/3 or Enter = take an AI recommendation (Enter = #1)\n"
+          "  u/d/l/r        = your own move up/down/left/right\n"
+          "  .              = stay still      q = quit\n")
+    while g.status == "playing":
+        print(f"Turn {g.turn + 1}")
+        print(g.render_text(), "\n")
+        for r in g.recommendations:
+            print(f"  [{r.rank}] {r.direction:<5} by {' + '.join(r.tags)}"
+                  f"  | risk {r.risk_level} | {r.summary}")
+        choice = input("your move> ").strip().lower()
+        if choice == "q":
+            return
+        cell = None
+        if choice == "" and g.recommendations:
+            cell = g.recommendations[0].cell
+        elif choice.isdigit() and 1 <= int(choice) <= len(g.recommendations):
+            cell = g.recommendations[int(choice) - 1].cell
+        elif choice in CONSOLE_KEYS:
+            dx, dy = CONSOLE_KEYS[choice]
+            cell = (g.human[0] + dx, g.human[1] + dy)
+        if cell is None or not g.play_human_move(cell):
+            print("  -> not a valid move, try again.\n")
+            continue
+        print(f"  -> {g.message}\n")
+    print(g.render_text(), "\n")
     print(g.status.upper(), "-", g.message)
 
 
@@ -77,6 +115,8 @@ def main():
     p.add_argument("--save", default=None, help="save Q-table to this file")
     p.add_argument("--load", default=None, help="load Q-table from this file")
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--manual", action="store_true",
+                   help="human-in-the-loop: AI recommends moves, you choose")
     a = p.parse_args()
 
     # --- Q-learner setup -------------------------------------------------
@@ -106,6 +146,8 @@ def main():
 
     if a.runs:
         run_batch(a.runs, a.seed, verbose=a.verbose, **game_kw)
+    elif a.console and a.manual:
+        run_console_manual(a.seed, **game_kw)
     elif a.console:
         run_console(a.seed, a.delay, **game_kw)
     else:
@@ -114,10 +156,13 @@ def main():
         except ModuleNotFoundError:
             print("pygame not installed - falling back to console mode.\n"
                   "Install it with: pip install -r requirements.txt")
-            run_console(a.seed, a.delay, **game_kw)
+            if a.manual:
+                run_console_manual(a.seed, **game_kw)
+            else:
+                run_console(a.seed, a.delay, **game_kw)
         else:
             gui.run(a.seed, zombie_brain=a.zombie, qlearner=learner,
-                    human_planner=a.planner)
+                    human_planner=a.planner, manual=a.manual)
 
 
 if __name__ == "__main__":
