@@ -26,12 +26,14 @@ from minimax import move_all_zombies, captured
 from riskmap import RiskMap
 from dstar import DStarLite, GOAL
 from qlearn import ZombieQLearner, q_zombie_turn, apply_updates
+import advisor
 
 
 class Game:
     def __init__(self, seed=None, zombie_brain=None, qlearner=None,
-                 human_planner=None, learn=False):
+                 human_planner=None, learn=False, manual=False):
         self.seed = seed
+        self.manual = manual           # True = human picks the moves (co-pilot)
         self.zombie_brain = zombie_brain or config.ZOMBIE_BRAIN
         self.human_planner = human_planner or config.HUMAN_PLANNER
         self.qlearner = qlearner or ZombieQLearner()
@@ -47,7 +49,12 @@ class Game:
         self.turn = 0
         self.status = "playing"        # playing | won | lost
         self.path = []
-        self.message = "Reach the safe zone!"
+        self.message = ("Your move - pick a recommendation or play your own!"
+                        if self.manual else "Reach the safe zone!")
+        self.recommendations = []      # advisor output for the current turn
+        self.planner_move = None       # what the AI planner would play now
+        self._prepared = False         # begin_turn() already run this turn?
+        self.stats = {"ai": 0, "top": 0, "own": 0}   # manual-mode choices
         self.riskmap = RiskMap(self.grid)
         self.riskmap.update(self.zombies)
         if self.human_planner == "dstar":
@@ -55,6 +62,8 @@ class Game:
             self.planner.reset(self.riskmap, self.human)
         else:
             self.planner = None
+        if self.manual:
+            self.begin_turn()          # first set of recommendations
 
     def fresh_riskmap(self):
         """New RiskMap object for this turn.
@@ -68,21 +77,71 @@ class Game:
         return rm
 
     # ------------------------------------------------------------------
-    def _human_move(self):
-        """Choose the human's next cell and the path used for display."""
+    def _plan_move(self):
+        """AI planner's choice for the human: returns (next_cell, path)."""
         old = self.human
         if self.planner is not None:
             self.planner.replan(self.riskmap, self.human)
             nxt = self.planner.next_move()
             if nxt is not None and nxt != GOAL:
-                self.path = self.planner.path_to_goal()
-                self.human = nxt
-                return
+                return nxt, self.planner.path_to_goal()
         # fallback: plain A* (also used when D* Lite finds no finite path)
-        self.human, self.path = human_next_move(self.grid, self.human,
-                                                self.zombies)
-        if not self.path:
-            self.path = [old, self.human]
+        nxt, path = human_next_move(self.grid, self.human, self.zombies)
+        if not path:
+            path = [old, nxt]
+        return nxt, path
+
+    def begin_turn(self):
+        """Prepare the human's upcoming move (idempotent within a turn).
+
+        Refreshes the risk field, lets the planner replan (so D* Lite stays
+        in sync even when a human is steering) and, in manual mode, asks the
+        advisor for ranked move recommendations.
+        """
+        if self._prepared:
+            return
+        self.riskmap = self.fresh_riskmap()
+        self.planner_move, self.path = self._plan_move()
+        self.recommendations = (advisor.recommend(self) if self.manual
+                                else [])
+        self._prepared = True
+
+    def legal_moves(self):
+        return advisor.legal_moves(self.grid, self.human, self.zombies)
+
+    def play_human_move(self, cell):
+        """Manual mode: the human plays `cell`. Returns False if illegal."""
+        if self.status != "playing":
+            return False
+        self.begin_turn()
+        if cell not in self.legal_moves():
+            self.message = "Illegal move - pick an adjacent free cell."
+            return False
+        kind, rank = advisor.classify_choice(self.recommendations, cell)
+        self.step(human_move=cell)
+        if kind == "ai":
+            self.stats["ai"] += 1
+            self.stats["top"] += rank == 1
+        else:
+            self.stats["own"] += 1
+        if self.status == "playing":
+            how = (f"AI pick #{rank}" if kind == "ai" else "your own move")
+            self.message = f"Played {how}. Your move."
+            self.begin_turn()          # recommendations for the next turn
+        else:
+            self.message += (f"  (AI picks followed: {self.stats['ai']}, "
+                             f"own moves: {self.stats['own']})")
+        return True
+
+    def set_manual(self, manual):
+        """Switch between AI-driven (auto) and human-driven (manual) play."""
+        self.manual = manual
+        self._prepared = False
+        if manual and self.status == "playing":
+            self.message = "Your move - pick a recommendation or play your own!"
+            self.begin_turn()
+        elif not manual:
+            self.recommendations = []
 
     def _zombie_move(self):
         """Move the zombie team; returns Q-transitions when learning."""
@@ -97,15 +156,19 @@ class Game:
         return None
 
     # ------------------------------------------------------------------
-    def step(self):
-        """One full turn: risk update -> human -> zombies."""
+    def step(self, human_move=None):
+        """One full turn: risk update -> human -> zombies.
+
+        human_move=None lets the AI planner move the human (auto mode);
+        passing a legal cell plays that move instead (manual mode).
+        """
         if self.status != "playing":
             return
+        # 1+2. refresh the risk field + plan (skipped if already prepared)
+        self.begin_turn()
         self.turn += 1
-
-        # 1+2. refresh the risk field, then move the human
-        self.riskmap = self.fresh_riskmap()
-        self._human_move()
+        self.human = self.planner_move if human_move is None else human_move
+        self._prepared = False
 
         # 3. resolve human move
         if self.human in self.grid.safe_cells:
@@ -138,6 +201,7 @@ class Game:
 
     # ------------------------------------------------------------------
     def render_text(self):
+        rec_rank = {r.cell: r.rank for r in self.recommendations}
         rows = []
         for y in range(self.grid.size):
             row = ""
@@ -149,6 +213,8 @@ class Game:
                     ch = "Z"
                 elif c in self.grid.walls:
                     ch = "#"
+                elif c in rec_rank:
+                    ch = str(rec_rank[c])      # AI recommendation 1/2/3
                 elif c in self.grid.safe_cells:
                     ch = "S"
                 elif c in self.path:
