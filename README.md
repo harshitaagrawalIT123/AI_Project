@@ -58,7 +58,7 @@ Q-update (training only)  team reward (capture/escape) + distance shaping
 Requires Python 3.8+. Pygame is only needed for the GUI.
 
     pip install -r requirements.txt          # only for the GUI
-    python main.py                           # GUI
+    python main.py                            
     python main.py --console                 # text mode (no pygame needed)
     python main.py --seed 7                  # same map every time
     python main.py --runs 50 --seed 100      # simulate 50 games, print win rate
